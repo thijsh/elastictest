@@ -1,0 +1,192 @@
+version: '2.2'
+services:
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.6.2
+    container_name: es01
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es02,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data01:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+    networks:
+      - elastic
+    healthcheck:
+      interval: 20s
+      retries: 10
+      test: curl -s http://localhost:9200/_cluster/health | grep -vq '"status":"red"'
+
+  es02:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.6.2
+    container_name: es02
+    environment:
+      - node.name=es02
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data02:/usr/share/elasticsearch/data
+    networks:
+      - elastic
+    healthcheck:
+      interval: 20s
+      retries: 10
+      test: curl -s http://localhost:9200/_cluster/health | grep -vq '"status":"red"'
+
+  es03:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.6.2
+    container_name: es03
+    environment:
+      - node.name=es03
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es02
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data03:/usr/share/elasticsearch/data
+    networks:
+      - elastic
+    healthcheck:
+      interval: 20s
+      retries: 10
+      test: curl -s http://localhost:9200/_cluster/health | grep -vq '"status":"red"'
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.6.2
+    ports:
+      - 5601:5601
+    environment:
+      ELASTICSEARCH_HOSTS: http://es01:9200 
+    networks:
+      - elastic
+    depends_on:
+      es01:
+        condition: service_healthy
+    healthcheck:
+      interval: 10s
+      retries: 20
+      test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:5601/api/status
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.6.2
+    container_name: logstash
+    #secrets:
+    #  - source: logstash.conf
+    #    target: /usr/share/logstash/pipeline/logstash.conf
+    #  - source: logstash.yml
+    #    target: /usr/share/logstash/config/logstash.yml
+    #  - source: logstash.keystore
+    #    target: /usr/share/logstash/config/logstash.keystore
+    #  - source: ca.crt
+    #    target: /usr/share/logstash/config/certs/ca/ca.crt
+    environment:
+      - xpack.monitoring.elasticsearch.hosts=["es01:9200","es02:9200","es03:9200"]
+    networks: 
+      - elastic
+    depends_on:
+      es01:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+    healthcheck:
+      test: bin/logstash -t
+      interval: 60s
+      timeout: 50s
+      retries: 5
+
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:7.6.2
+    depends_on:
+      es01:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
+    cap_drop: ["ALL"]
+    ports:
+    - 8200:8200
+    networks:
+    - elastic
+    command: >
+       apm-server -e
+         -E apm-server.rum.enabled=true
+         -E setup.kibana.host=kibana:5601
+         -E setup.template.settings.index.number_of_replicas=0
+         -E apm-server.kibana.enabled=true
+         -E apm-server.kibana.host=kibana:5601
+         -E output.elasticsearch.hosts=["es01:9200","es02:9200","es03:9200"]
+    environment:
+      - ELASTIC_APM_SECRET_TOKEN=sHKic2n46Z76XgP6kuPZgFuUOwzg1cEXdt9MB3cYZQ7P4fFxzVelQNGCUyq7AHVV
+    healthcheck:
+      interval: 10s
+      retries: 12
+      test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:8200/
+
+  postgres:
+    image: postgres
+    environment:
+    - POSTGRES_PASSWORD=CHoPdGBboPUFhoWFKJe7spT5D5hXPo8Yz5KIpxbxrueLDWLfUukVJrprofMJgAee
+    volumes:
+      - pgdata01:/var/lib/postgresql/data
+    networks:
+    - postgres
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      - POSTGRES_PASSWORD=CHoPdGBboPUFhoWFKJe7spT5D5hXPo8Yz5KIpxbxrueLDWLfUukVJrprofMJgAee
+      - ELASTIC_APM_DEBUG=True
+      - ELASTIC_APM_SERVICE_NAME=djangotest
+      - ELASTIC_APM_SERVER_URL=http://apm-server:8200
+      - ELASTIC_APM_SECRET_TOKEN=sHKic2n46Z76XgP6kuPZgFuUOwzg1cEXdt9MB3cYZQ7P4fFxzVelQNGCUyq7AHVV
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    networks:
+    - postgres
+    - elastic
+
+volumes:
+  data01:
+    driver: local
+  data02:
+    driver: local
+  data03:
+    driver: local
+  pgdata01:
+    driver: local
+
+networks:
+  elastic:
+    driver: bridge
+  postgres:
+    driver: bridge

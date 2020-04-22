@@ -1,0 +1,29 @@
+
+
+
+
+
+AFTER SETUP INIT DJANGO WITH:
+
+docker ps
+docker exec -it XXXX python manage.py migrate
+docker exec -it XXXX python manage.py createsuperuser
+
+
+
+CUSTOM APM
+
+@elasticapm.capture_span()
+def homeTestView(request):
+    sleep(randint(1,10))
+    with elasticapm.capture_span('this-should-only-take-1-second'):
+        sleep(1)
+
+
+
+REFERENCES:
+- Quickstart Docker Django: https://docs.docker.com/compose/django/
+- Django APM installation: https://www.elastic.co/guide/en/apm/agent/python/current/django-support.html
+- Secure APM: https://www.elastic.co/guide/en/apm/server/current/secret-token.html
+- Instrument custom code: https://www.elastic.co/guide/en/apm/agent/python/current/instrumenting-custom-code.html
+- Run with Kubernetes: https://www.elastic.co/guide/en/cloud-on-k8s/current/k8s-quickstart.html
